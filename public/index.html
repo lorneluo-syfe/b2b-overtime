@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>b2b-overtime dashboard</title>
+    <style>
+      :root {
+        --bg: #0f1420;
+        --panel: #171d2c;
+        --border: #2a3346;
+        --text: #e7ecf3;
+        --muted: #93a0b5;
+        --accent: #5b8cff;
+        --work: #7d8aa5;
+        --ot: #ffb454;
+        /* heatmap ramps (low -> high), applied in JS as opacity over these RGBs */
+        --heat: 91, 140, 255;      /* work-hours activity (blue) */
+        --heat-ot: 255, 99, 99;    /* rest-time activity (red) */
+        /* idle rest-time cells: existing gray with a touch of yellow mixed in */
+        --rest-bg: rgba(190, 176, 96, 0.16);
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f5f7fb;
+          --panel: #ffffff;
+          --border: #dde3ee;
+          --text: #1a2233;
+          --muted: #5b6577;
+          --accent: #2f6bff;
+          --work: #8a94a8;
+          --ot: #d98411;
+          --heat: 47, 107, 255;
+          --heat-ot: 220, 38, 38;
+          --rest-bg: rgba(200, 175, 60, 0.20);
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 24px;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      .sub { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px 18px;
+        margin-bottom: 20px;
+      }
+      .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+      .field { display: flex; flex-direction: column; gap: 4px; }
+      .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+      input[type="date"] {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px 8px;
+        font: inherit;
+        color-scheme: dark light;
+      }
+      .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+      button {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px 12px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover { border-color: var(--accent); }
+      button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+      table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+      th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--border); }
+      th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+      thead th { color: var(--text); font-weight: 600; font-size: 13px; vertical-align: bottom; }
+      thead th .th-sub { display: block; font-weight: 400; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-top: 2px; }
+      tbody tr:hover { background: rgba(127, 140, 170, 0.08); }
+      tfoot td { font-weight: 700; border-top: 2px solid var(--border); border-bottom: none; }
+      .ot-cell { color: var(--ot); font-weight: 600; }
+      .coverage { color: var(--muted); font-size: 12px; margin-top: 12px; }
+      .coverage code { color: var(--text); }
+      .msg { color: var(--muted); padding: 8px 0; }
+      .err { color: #ff6b6b; }
+
+      /* heatmap */
+      .heatwrap { overflow-x: auto; }
+      .heatgrid { display: grid; gap: 2px; width: max-content; }
+      .hcell {
+        width: 22px; height: 20px; border-radius: 3px;
+        background: rgba(127, 140, 170, 0.10);
+        border: 1px solid transparent;
+      }
+      .hcell.work { border-color: rgba(127, 140, 170, 0.45); }
+      .hcell.rest { background: var(--rest-bg); }
+      .hlabel { color: var(--muted); font-size: 11px; display: flex; align-items: center; }
+      .hlabel.col { justify-content: center; height: 16px; }
+      .hlabel.row { justify-content: flex-end; padding-right: 6px; white-space: nowrap; }
+      .legend { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin-top: 12px; }
+      .legend .swatch, .legend .swatch-ot { width: 16px; height: 14px; border-radius: 3px; }
+      .legend .box { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(127,140,170,0.45); background: rgba(127,140,170,0.10); }
+      .legend .rest-box { border-color: transparent; background: var(--rest-bg); }
+    </style>
+  </head>
+  <body>
+    <h1>b2b-overtime dashboard</h1>
+    <div class="sub" id="subtitle">Timezone Australia/Sydney · work hours Mon–Fri 09:00–17:00 · 00:00–03:00 rolls to the previous day</div>
+
+    <div class="panel">
+      <div class="controls">
+        <div class="field">
+          <label for="start">Start</label>
+          <input type="date" id="start" />
+        </div>
+        <div class="field">
+          <label for="end">End</label>
+          <input type="date" id="end" />
+        </div>
+        <div class="field">
+          <label>Quick range</label>
+          <div class="presets" id="presets">
+            <button data-days="7" class="active">Last 7 days</button>
+            <button data-days="14">Last 14 days</button>
+            <button data-days="30">Last 30 days</button>
+            <button data-preset="all">All time</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div id="table-msg" class="msg">Loading…</div>
+      <table id="table" hidden>
+        <thead>
+          <tr>
+            <th title="Attributed calendar day (00:00–03:00 rolls to the previous day)">Date</th>
+            <th title="Day of week">Weekday</th>
+            <th title="Claude Code prompts you typed during work hours (Mon–Fri 09:00–17:00)">Prompts<span class="th-sub">work hrs</span></th>
+            <th title="Commits you made during work hours (from git reflog)">Commits<span class="th-sub">work hrs</span></th>
+            <th title="Claude Code prompts you typed outside work hours">Prompts<span class="th-sub">after hrs</span></th>
+            <th title="Commits you made outside work hours (from git reflog)">Commits<span class="th-sub">after hrs</span></th>
+            <th title="Overtime duration: summed span of dense after-hours active segments (prompts + commits), gaps over the idle threshold excluded">Overtime<span class="th-sub">active hrs</span></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+        <tfoot id="tfoot"></tfoot>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div style="margin-bottom:12px;font-weight:600;">Activity heatmap <span style="color:var(--muted);font-weight:400;font-size:12px;">— each cell = activity (prompts + commits) in that day × hour</span></div>
+      <div id="heat-msg" class="msg">Loading…</div>
+      <div class="heatwrap"><div class="heatgrid" id="heatgrid"></div></div>
+      <div class="legend" id="legend" hidden>
+        <span>Work hrs</span>
+        <span class="swatch" data-l="0.2"></span>
+        <span class="swatch" data-l="0.5"></span>
+        <span class="swatch" data-l="0.8"></span>
+        <span class="swatch" data-l="1"></span>
+        <span style="margin-left:16px;">Rest time</span>
+        <span class="swatch-ot" data-l="0.2"></span>
+        <span class="swatch-ot" data-l="0.5"></span>
+        <span class="swatch-ot" data-l="0.8"></span>
+        <span class="swatch-ot" data-l="1"></span>
+        <span style="margin-left:16px;" class="box rest-box"></span>
+        <span>= rest time, no activity</span>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const startEl = $("start"), endEl = $("end");
+
+      // "today" is the server's Australia/Sydney calendar date (from the first
+      // API response), so presets stay tz-correct regardless of the browser's
+      // own timezone. Falls back to the browser date until the first load lands.
+      let serverToday = null; // "YYYY-MM-DD"
+      let dataBounds = null;  // { start, end } full activity extent, for "All time"
+
+      // ---- date helpers (local calendar dates) ----
+      const iso = (d) => {
+        const p = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      };
+      const ymdToDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+      function todayDate() { return serverToday ? ymdToDate(serverToday) : new Date(); }
+      function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+
+      function setRange(start, end) {
+        startEl.value = iso(start);
+        endEl.value = iso(end);
+      }
+      function applyPresetDays(days) {
+        const e = todayDate();
+        setRange(addDays(e, -(days - 1)), e);
+      }
+      function applyAll() {
+        // Full activity extent from the DB; fall back to last 30 days if unknown.
+        if (dataBounds) setRange(ymdToDate(dataBounds.start), ymdToDate(dataBounds.end));
+        else applyPresetDays(30);
+      }
+
+      function markActive(btn) {
+        document.querySelectorAll("#presets button").forEach((b) => b.classList.remove("active"));
+        if (btn) btn.classList.add("active");
+      }
+
+      $("presets").addEventListener("click", (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        markActive(btn);
+        if (btn.dataset.preset === "all") applyAll();
+        else applyPresetDays(Number(btn.dataset.days));
+        load();
+      });
+      startEl.addEventListener("change", () => { markActive(null); load(); });
+      endEl.addEventListener("change", () => { markActive(null); load(); });
+
+      // ---- rendering ----
+      function num(n) { return n === 0 ? "0" : String(n); }
+
+      function renderTable(rep) {
+        const tbody = $("tbody"), tfoot = $("tfoot");
+        tbody.innerHTML = "";
+        if (!rep.rows.length) {
+          $("table").hidden = true;
+          $("table-msg").textContent = "No activity in this range.";
+          $("table-msg").className = "msg";
+          return;
+        }
+        for (const r of rep.rows) {
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            `<td>${r.date}</td><td>${r.weekday}</td>` +
+            `<td>${num(r.chatWork)}</td><td>${num(r.gitWork)}</td>` +
+            `<td>${num(r.chatOt)}</td><td>${num(r.gitOt)}</td>` +
+            `<td class="ot-cell">${r.otLabel}</td>`;
+          tbody.appendChild(tr);
+        }
+        const t = rep.total;
+        tfoot.innerHTML =
+          `<tr><td>Total</td><td></td>` +
+          `<td>${t.chatWork}</td><td>${t.gitWork}</td>` +
+          `<td>${t.chatOt}</td><td>${t.gitOt}</td>` +
+          `<td class="ot-cell">${t.otLabel}</td></tr>`;
+        $("table").hidden = false;
+        $("table-msg").textContent = "";
+      }
+
+      function renderHeatmap(rep) {
+        const grid = $("heatgrid");
+        grid.innerHTML = "";
+
+        // One row per day across the WHOLE selected range (including days with no
+        // activity), so the heatmap always mirrors the daterange, not just the
+        // days that happened to have events.
+        const dates = [];
+        let cur = ymdToDate(rep.range.start);
+        const last = ymdToDate(rep.range.end);
+        for (; cur <= last; cur = addDays(cur, 1)) dates.push(iso(cur));
+
+        $("heat-msg").textContent = "";
+        $("legend").hidden = false;
+
+        const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const weekdayOf = (date) => WD[ymdToDate(date).getDay()];
+
+        // counts keyed by `${date}\t${hour}`; find max for the color ramp.
+        const counts = {};
+        let max = 0;
+        for (const c of rep.heatmap) {
+          counts[`${c.date}\t${c.hour}`] = c.count;
+          if (c.count > max) max = c.count;
+        }
+
+        grid.style.gridTemplateColumns = `auto repeat(24, 22px)`;
+
+        // header row: blank corner + hour labels
+        const corner = document.createElement("div");
+        grid.appendChild(corner);
+        for (let h = 0; h < 24; h++) {
+          const lab = document.createElement("div");
+          lab.className = "hlabel col";
+          lab.textContent = h % 3 === 0 ? String(h) : "";
+          grid.appendChild(lab);
+        }
+
+        const isWorkDay = (wd) => ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(wd);
+        for (const date of dates) {
+          const wd = weekdayOf(date);
+          const rowLab = document.createElement("div");
+          rowLab.className = "hlabel row";
+          rowLab.textContent = `${date} ${wd}`;
+          grid.appendChild(rowLab);
+          for (let h = 0; h < 24; h++) {
+            const cell = document.createElement("div");
+            const n = counts[`${date}\t${h}`] || 0;
+            // Rest time = weekday nights/early hours + all weekend hours.
+            const work = isWorkDay(wd) && h >= 9 && h < 17;
+            cell.className = "hcell" + (work ? " work" : " rest");
+            if (n > 0) {
+              // opacity ramp 0.15 -> 1, sqrt for perceptual spread. Rest-time
+              // activity uses the red ramp; work-hours activity uses blue.
+              const l = 0.15 + 0.85 * Math.sqrt(n / max);
+              const rgb = work ? "var(--heat)" : "var(--heat-ot)";
+              cell.style.background = `rgba(${rgb}, ${l.toFixed(3)})`;
+            }
+            cell.title = `${date} ${String(h).padStart(2, "0")}:00 — ${n} event(s)`;
+            grid.appendChild(cell);
+          }
+        }
+      }
+
+      // legend swatches use the same ramp variables (blue = work, red = rest)
+      for (const s of document.querySelectorAll(".legend .swatch")) {
+        s.style.background = `rgba(var(--heat), ${s.dataset.l})`;
+      }
+      for (const s of document.querySelectorAll(".legend .swatch-ot")) {
+        s.style.background = `rgba(var(--heat-ot), ${s.dataset.l})`;
+      }
+
+      let reqId = 0;
+      // qs=null → let the server pick its Sydney default window (used on first
+      // load so "recent 7 days" is tz-correct even before serverToday is known).
+      async function fetchAndRender(qs) {
+        const myId = ++reqId;
+        $("table-msg").textContent = "Loading…";
+        $("table-msg").className = "msg";
+        $("heat-msg").textContent = "Loading…";
+        try {
+          const res = await fetch("/api/overtime" + (qs ? "?" + qs : ""));
+          const data = await res.json();
+          if (myId !== reqId) return; // a newer request superseded this one
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          serverToday = data.range.end;
+          if (data.bounds) dataBounds = data.bounds;
+          $("subtitle").textContent =
+            `${data.range.start} ~ ${data.range.end} · ${data.range.zone} · work hours Mon–Fri 09:00–17:00 · 00:00–03:00 rolls to previous day · gap ${data.range.gap}m`;
+          renderTable(data);
+          renderHeatmap(data);
+          return data;
+        } catch (err) {
+          if (myId !== reqId) return;
+          $("table").hidden = true;
+          $("table-msg").textContent = "Failed to load: " + err.message;
+          $("table-msg").className = "msg err";
+          $("heat-msg").textContent = "";
+          $("legend").hidden = true;
+        }
+      }
+
+      function load() {
+        const start = startEl.value, end = endEl.value;
+        if (!start || !end) return;
+        fetchAndRender(`start=${start}&end=${end}`);
+      }
+
+      // init: first load uses the server's Sydney default (recent 7 days), then
+      // seeds the date inputs so subsequent presets are computed off Sydney today.
+      (async () => {
+        const data = await fetchAndRender(null);
+        if (data) setRange(ymdToDate(data.range.start), ymdToDate(data.range.end));
+      })();
+    </script>
+  </body>
+</html>

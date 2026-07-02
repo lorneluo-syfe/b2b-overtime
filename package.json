@@ -1,0 +1,31 @@
+{
+  "name": "b2b-overtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight Drizzle ORM over the .env Neon database, with a checkpoint recorder and overtime collector.",
+  "imports": {
+    "#db": "./src/db/index.ts"
+  },
+  "scripts": {
+    "record-checkpoint": "tsx scripts/record-checkpoint.ts",
+    "query": "tsx .claude/skills/query-overtime-db/scripts/query.ts",
+    "overtime": "tsx .claude/skills/b2b-overtime/scripts/analyze-overtime.ts",
+    "dashboard": "tsx server/dashboard.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.36.4",
+    "luxon": "^3.5.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.4.2",
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
