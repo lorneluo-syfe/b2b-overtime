@@ -19,6 +19,10 @@
         --heat-ot: 255, 99, 99;    /* rest-time activity (red) */
         /* idle rest-time cells: existing gray with a touch of yellow mixed in */
         --rest-bg: rgba(190, 176, 96, 0.16);
+        /* bar-chart segments: work hours (blue) stacked below after-hours (red,
+           matching the heatmap's rest-time red) */
+        --bar-work: #5b8cff;
+        --bar-ot: #ff6363;
       }
       @media (prefers-color-scheme: light) {
         :root {
@@ -33,6 +37,8 @@
           --heat: 47, 107, 255;
           --heat-ot: 220, 38, 38;
           --rest-bg: rgba(200, 175, 60, 0.20);
+          --bar-work: #2f6bff;
+          --bar-ot: #dc2626;
         }
       }
       * { box-sizing: border-box; }
@@ -107,6 +113,22 @@
       .legend .swatch, .legend .swatch-ot { width: 16px; height: 14px; border-radius: 3px; }
       .legend .box { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(127,140,170,0.45); background: rgba(127,140,170,0.10); }
       .legend .rest-box { border-color: transparent; background: var(--rest-bg); }
+      .legend .seg-work { border-color: transparent; background: var(--bar-work); }
+      .legend .seg-ot { border-color: transparent; background: var(--bar-ot); }
+
+      /* bar charts */
+      .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+      .barchart { overflow-x: auto; }
+      .plot { display: grid; align-items: end; height: 168px; gap: 3px; border-bottom: 1px solid var(--border); padding-bottom: 1px; min-width: max-content; }
+      .barcol { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 10px; }
+      .seg { border-radius: 2px; transition: opacity 0.1s; }
+      .seg.work { background: var(--bar-work); }
+      .seg.ot { background: var(--bar-ot); border-radius: 2px 2px 0 0; }
+      .barcol:has(.seg.ot) .seg.work { border-radius: 0 0 2px 2px; }
+      .barcol:hover .seg { opacity: 0.75; }
+      .xrow { display: grid; gap: 3px; margin-top: 4px; min-width: max-content; }
+      .xlab { font-size: 10px; color: var(--muted); text-align: center; overflow: hidden; white-space: nowrap; }
+      .peak { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
     </style>
   </head>
   <body>
@@ -174,6 +196,30 @@
       </div>
     </div>
 
+    <div class="panel">
+      <div class="chart-head">
+        <span style="font-weight:600;">Chat prompts per day</span>
+        <span class="legend">
+          <span class="box seg-work"></span><span>work hrs</span>
+          <span style="margin-left:12px;" class="box seg-ot"></span><span>after hrs</span>
+        </span>
+      </div>
+      <div id="chat-msg" class="msg">Loading…</div>
+      <div class="barchart" id="chat-chart"></div>
+    </div>
+
+    <div class="panel">
+      <div class="chart-head">
+        <span style="font-weight:600;">Commits per day <span style="color:var(--muted);font-weight:400;font-size:12px;">— from git reflog</span></span>
+        <span class="legend">
+          <span class="box seg-work"></span><span>work hrs</span>
+          <span style="margin-left:12px;" class="box seg-ot"></span><span>after hrs</span>
+        </span>
+      </div>
+      <div id="git-msg" class="msg">Loading…</div>
+      <div class="barchart" id="git-chart"></div>
+    </div>
+
     <script>
       const $ = (id) => document.getElementById(id);
       const startEl = $("start"), endEl = $("end");
@@ -192,6 +238,18 @@
       const ymdToDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
       function todayDate() { return serverToday ? ymdToDate(serverToday) : new Date(); }
       function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+
+      // shared across heatmap + bar charts: every calendar day in the report
+      // range (inclusive), and the weekday abbreviation for a date.
+      const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const weekdayOf = (date) => WD[ymdToDate(date).getDay()];
+      function rangeDates(rep) {
+        const out = [];
+        let cur = ymdToDate(rep.range.start);
+        const last = ymdToDate(rep.range.end);
+        for (; cur <= last; cur = addDays(cur, 1)) out.push(iso(cur));
+        return out;
+      }
 
       function setRange(start, end) {
         startEl.value = iso(start);
@@ -260,17 +318,11 @@
 
         // One row per day across the WHOLE selected range (including days with no
         // activity), so the heatmap always mirrors the daterange, not just the
-        // days that happened to have events.
-        const dates = [];
-        let cur = ymdToDate(rep.range.start);
-        const last = ymdToDate(rep.range.end);
-        for (; cur <= last; cur = addDays(cur, 1)) dates.push(iso(cur));
+        // days that happened to have events. Newest day on top (descending).
+        const dates = rangeDates(rep).reverse();
 
         $("heat-msg").textContent = "";
         $("legend").hidden = false;
-
-        const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const weekdayOf = (date) => WD[ymdToDate(date).getDay()];
 
         // counts keyed by `${date}\t${hour}`; find max for the color ramp.
         const counts = {};
@@ -318,6 +370,71 @@
         }
       }
 
+      // Stacked per-day bar chart: work-hours count at the bottom, after-hours on
+      // top. Spans the whole selected range (empty days show as gaps).
+      const PLOT_H = 168;
+      function renderBars(chartId, msgId, rep, workKey, otKey) {
+        const wrap = $(chartId);
+        wrap.innerHTML = "";
+        const dates = rangeDates(rep);
+        const byDate = {};
+        for (const r of rep.rows) byDate[r.date] = r;
+
+        let max = 0;
+        for (const d of dates) {
+          const r = byDate[d];
+          if (r) max = Math.max(max, (r[workKey] || 0) + (r[otKey] || 0));
+        }
+        if (!max) {
+          $(msgId).textContent = "No activity in this range.";
+          return;
+        }
+        $(msgId).textContent = "";
+
+        const peak = document.createElement("div");
+        peak.className = "peak";
+        peak.textContent = `peak ${max}/day`;
+        wrap.appendChild(peak);
+
+        const cols = `repeat(${dates.length}, minmax(10px, 1fr))`;
+        const plot = document.createElement("div");
+        plot.className = "plot";
+        plot.style.gridTemplateColumns = cols;
+        for (const d of dates) {
+          const r = byDate[d] || {};
+          const w = r[workKey] || 0, o = r[otKey] || 0;
+          const col = document.createElement("div");
+          col.className = "barcol";
+          col.title = `${d} ${weekdayOf(d)} — work ${w}, after hrs ${o}, total ${w + o}`;
+          if (o > 0) {
+            const s = document.createElement("div");
+            s.className = "seg ot";
+            s.style.height = `${(o / max) * PLOT_H}px`;
+            col.appendChild(s);
+          }
+          if (w > 0) {
+            const s = document.createElement("div");
+            s.className = "seg work";
+            s.style.height = `${(w / max) * PLOT_H}px`;
+            col.appendChild(s);
+          }
+          plot.appendChild(col);
+        }
+        wrap.appendChild(plot);
+
+        const xrow = document.createElement("div");
+        xrow.className = "xrow";
+        xrow.style.gridTemplateColumns = cols;
+        const step = Math.ceil(dates.length / 15);
+        dates.forEach((d, i) => {
+          const lab = document.createElement("div");
+          lab.className = "xlab";
+          lab.textContent = i % step === 0 ? d.slice(5) : ""; // MM-DD
+          xrow.appendChild(lab);
+        });
+        wrap.appendChild(xrow);
+      }
+
       // legend swatches use the same ramp variables (blue = work, red = rest)
       for (const s of document.querySelectorAll(".legend .swatch")) {
         s.style.background = `rgba(var(--heat), ${s.dataset.l})`;
@@ -334,6 +451,8 @@
         $("table-msg").textContent = "Loading…";
         $("table-msg").className = "msg";
         $("heat-msg").textContent = "Loading…";
+        $("chat-msg").textContent = "Loading…";
+        $("git-msg").textContent = "Loading…";
         try {
           const res = await fetch("/api/overtime" + (qs ? "?" + qs : ""));
           const data = await res.json();
@@ -345,6 +464,8 @@
             `${data.range.start} ~ ${data.range.end} · ${data.range.zone} · work hours Mon–Fri 09:00–17:00 · 00:00–03:00 rolls to previous day · gap ${data.range.gap}m`;
           renderTable(data);
           renderHeatmap(data);
+          renderBars("chat-chart", "chat-msg", data, "chatWork", "chatOt");
+          renderBars("git-chart", "git-msg", data, "gitWork", "gitOt");
           return data;
         } catch (err) {
           if (myId !== reqId) return;
@@ -353,6 +474,10 @@
           $("table-msg").className = "msg err";
           $("heat-msg").textContent = "";
           $("legend").hidden = true;
+          $("chat-chart").innerHTML = "";
+          $("git-chart").innerHTML = "";
+          $("chat-msg").textContent = "";
+          $("git-msg").textContent = "";
         }
       }
 
