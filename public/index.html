@@ -5,41 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>b2b-overtime dashboard</title>
     <style>
+      /* Always light theme (does not follow the OS dark-mode preference). */
       :root {
-        --bg: #0f1420;
-        --panel: #171d2c;
-        --border: #2a3346;
-        --text: #e7ecf3;
-        --muted: #93a0b5;
-        --accent: #5b8cff;
-        --work: #7d8aa5;
-        --ot: #ffb454;
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --border: #dde3ee;
+        --text: #1a2233;
+        --muted: #5b6577;
+        --accent: #2f6bff;
+        --work: #8a94a8;
+        --ot: #d98411;
         /* heatmap ramps (low -> high), applied in JS as opacity over these RGBs */
-        --heat: 91, 140, 255;      /* work-hours activity (blue) */
-        --heat-ot: 255, 99, 99;    /* rest-time activity (red) */
+        --heat: 47, 107, 255;     /* work-hours activity (blue) */
+        --heat-ot: 220, 38, 38;   /* rest-time activity (red) */
         /* idle rest-time cells: existing gray with a touch of yellow mixed in */
-        --rest-bg: rgba(190, 176, 96, 0.16);
+        --rest-bg: rgba(200, 175, 60, 0.20);
         /* bar-chart segments: work hours (blue) stacked below after-hours (red,
            matching the heatmap's rest-time red) */
-        --bar-work: #5b8cff;
-        --bar-ot: #ff6363;
-      }
-      @media (prefers-color-scheme: light) {
-        :root {
-          --bg: #f5f7fb;
-          --panel: #ffffff;
-          --border: #dde3ee;
-          --text: #1a2233;
-          --muted: #5b6577;
-          --accent: #2f6bff;
-          --work: #8a94a8;
-          --ot: #d98411;
-          --heat: 47, 107, 255;
-          --heat-ot: 220, 38, 38;
-          --rest-bg: rgba(200, 175, 60, 0.20);
-          --bar-work: #2f6bff;
-          --bar-ot: #dc2626;
-        }
+        --bar-work: #2f6bff;
+        --bar-ot: #dc2626;
       }
       * { box-sizing: border-box; }
       body {
@@ -69,7 +54,7 @@
         border-radius: 8px;
         padding: 6px 8px;
         font: inherit;
-        color-scheme: dark light;
+        color-scheme: light;
       }
       .presets { display: flex; gap: 6px; flex-wrap: wrap; }
       button {
@@ -108,7 +93,7 @@
       .hcell.rest { background: var(--rest-bg); }
       .hlabel { color: var(--muted); font-size: 11px; display: flex; align-items: center; }
       .hlabel.col { justify-content: center; height: 16px; }
-      .hlabel.row { justify-content: flex-end; padding-right: 6px; white-space: nowrap; }
+      .hlabel.row { justify-content: flex-end; padding-right: 6px; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
       .legend { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin-top: 12px; }
       .legend .swatch, .legend .swatch-ot { width: 16px; height: 14px; border-radius: 3px; }
       .legend .box { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(127,140,170,0.45); background: rgba(127,140,170,0.10); }
@@ -119,14 +104,18 @@
       /* bar charts */
       .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
       .barchart { overflow-x: auto; }
-      .plot { display: grid; align-items: end; height: 168px; gap: 3px; border-bottom: 1px solid var(--border); padding-bottom: 1px; min-width: max-content; }
-      .barcol { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 10px; }
+      .plot-area { display: flex; align-items: flex-end; }
+      .yaxis { position: relative; width: 30px; flex: 0 0 30px; align-self: stretch; }
+      .ytick { position: absolute; right: 6px; transform: translateY(50%); font-size: 10px; color: var(--muted); line-height: 1; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+      .plot { position: relative; display: grid; align-items: end; height: 168px; gap: 3px; border-bottom: 1px solid var(--border); padding-bottom: 1px; min-width: max-content; flex: 1 1 auto; }
+      .gridline { position: absolute; left: 0; right: 0; height: 1px; background: var(--border); opacity: 0.6; z-index: 0; pointer-events: none; }
+      .barcol { position: relative; z-index: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; min-width: 10px; }
       .seg { border-radius: 2px; transition: opacity 0.1s; }
       .seg.work { background: var(--bar-work); }
       .seg.ot { background: var(--bar-ot); border-radius: 2px 2px 0 0; }
       .barcol:has(.seg.ot) .seg.work { border-radius: 0 0 2px 2px; }
       .barcol:hover .seg { opacity: 0.75; }
-      .xrow { display: grid; gap: 3px; margin-top: 4px; min-width: max-content; }
+      .xrow { display: grid; gap: 3px; margin-top: 4px; min-width: max-content; margin-left: 30px; }
       .xlab { font-size: 10px; color: var(--muted); text-align: center; overflow: hidden; white-space: nowrap; }
       .peak { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
     </style>
@@ -373,6 +362,18 @@
       // Stacked per-day bar chart: work-hours count at the bottom, after-hours on
       // top. Spans the whole selected range (empty days show as gaps).
       const PLOT_H = 168;
+      // "Nice", integer-friendly y-axis scale: returns a rounded-up max and the
+      // tick values (0..niceMax) so bars align to labelled gridlines.
+      function niceScale(max, targetTicks = 4) {
+        const raw = max / targetTicks;
+        const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+        const norm = raw / mag;
+        const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+        const niceMax = Math.ceil(max / step) * step;
+        const ticks = [];
+        for (let v = 0; v <= niceMax + step / 2; v += step) ticks.push(v);
+        return { niceMax, ticks };
+      }
       function renderBars(chartId, msgId, rep, workKey, otKey) {
         const wrap = $(chartId);
         wrap.innerHTML = "";
@@ -396,10 +397,35 @@
         peak.textContent = `peak ${max}/day`;
         wrap.appendChild(peak);
 
+        const { niceMax, ticks } = niceScale(max);
+
+        const area = document.createElement("div");
+        area.className = "plot-area";
+
+        // y-axis: numeric tick labels aligned to the plot baseline.
+        const yaxis = document.createElement("div");
+        yaxis.className = "yaxis";
+        yaxis.style.height = `${PLOT_H}px`;
+        for (const v of ticks) {
+          const t = document.createElement("div");
+          t.className = "ytick";
+          t.style.bottom = `${(v / niceMax) * PLOT_H}px`;
+          t.textContent = String(v);
+          yaxis.appendChild(t);
+        }
+        area.appendChild(yaxis);
+
         const cols = `repeat(${dates.length}, minmax(10px, 1fr))`;
         const plot = document.createElement("div");
         plot.className = "plot";
         plot.style.gridTemplateColumns = cols;
+        // horizontal gridlines behind the bars, one per y tick.
+        for (const v of ticks) {
+          const gl = document.createElement("div");
+          gl.className = "gridline";
+          gl.style.bottom = `${(v / niceMax) * PLOT_H}px`;
+          plot.appendChild(gl);
+        }
         for (const d of dates) {
           const r = byDate[d] || {};
           const w = r[workKey] || 0, o = r[otKey] || 0;
@@ -409,18 +435,19 @@
           if (o > 0) {
             const s = document.createElement("div");
             s.className = "seg ot";
-            s.style.height = `${(o / max) * PLOT_H}px`;
+            s.style.height = `${(o / niceMax) * PLOT_H}px`;
             col.appendChild(s);
           }
           if (w > 0) {
             const s = document.createElement("div");
             s.className = "seg work";
-            s.style.height = `${(w / max) * PLOT_H}px`;
+            s.style.height = `${(w / niceMax) * PLOT_H}px`;
             col.appendChild(s);
           }
           plot.appendChild(col);
         }
-        wrap.appendChild(plot);
+        area.appendChild(plot);
+        wrap.appendChild(area);
 
         const xrow = document.createElement("div");
         xrow.className = "xrow";
